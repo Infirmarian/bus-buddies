@@ -1,86 +1,91 @@
 from googleapiclient.discovery import build
-from httplib2 import Http
-from oauth2client import file, client, tools
-import csv
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+import pickle
+import json
 import os
 import random
 import sms
 import send_email
 import time
-import conf
+import config
+import sqlite3
 
 # If modifying these scopes, delete the file token.json.
-SCOPES = 'https://www.googleapis.com/auth/spreadsheets.readonly https://www.googleapis.com/auth/gmail.send'
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly', 'https://www.googleapis.com/auth/gmail.send']
+SPREADSHEET_ID = config.SPREADSHEET_ID
+RANGE_NAME = config.RANGE_NAME
 
-SPREADSHEET_ID = conf.SPREADSHEET_ID
-RANGE_NAME = conf.RANGE_NAME
+class Clarinet():
+    def __init__(self, name, likes, dislikes, allergies, number, email):
+        self.name = name
+        self.likes = likes
+        self.dislikes = dislikes
+        self.allergies = allergies
+        self.number = ''.join(n if n.isdigit() else '' for n in number)
+        self.email = email
+        self.buddy = None
+        self.history = {}
+    def serializeFormat(self):
+        return {
+            'name': self.name,
+            'likes': self.likes,
+            'dislikes': self.dislikes,
+            'allergies': self.allergies,
+            'number': self.number,
+            'email': self.email,
+            'history': self.history
+        }
+    def __eq__(self, other):
+        if isinstance(other, Clarinet):
+            return other.name == self.name
+        if isinstance(other, str):
+            return other == self.name
+        return False
+    def __hash__(self):
+        return hash(self.name)
 
 def get_google_sheets():
-    store = file.Storage('token.json')
-    creds = store.get()
-    if not creds or creds.invalid:
-        flow = client.flow_from_clientsecrets('credentials.json', SCOPES)
-        creds = tools.run_flow(flow, store)
-    service = build('sheets', 'v4', http=creds.authorize(Http()))
+    creds = None
+    # The file token.pickle stores the user's access and refresh tokens, and is
+    # created automatically when the authorization flow completes for the first
+    # time.
+    if os.path.exists('token.pickle'):
+        with open('token.pickle', 'rb') as token:
+            creds = pickle.load(token)
+    # If there are no (valid) credentials available, let the user log in.
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                'credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        # Save the credentials for the next run
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(creds, token)
+
+    service = build('sheets', 'v4', credentials=creds)
 
     # Call the Sheets API
-    result = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID,
-                                                range=RANGE_NAME).execute()
+    sheet = service.spreadsheets()
+    result = sheet.values().get(spreadsheetId=SPREADSHEET_ID,
+                                range=RANGE_NAME).execute()
     values = result.get('values', [])
 
-    nets = {}
+    if not values:
+        print('No data found.')
+    nets = set()
 
     if not values:
         print('No data found.')
     else:
         for row in values[1:]:
             if len(row) > 5 and row[5] != "":
-                print("{} opted out".format(row[0]))
+                print("%s opted out" % row[0])
                 continue
-            nets[row[0]] = {
-                "likes":row[1],
-                "dislikes":row[2],
-                "allergies":row[3],
-                "number":strip_vals(row[4]),
-                "buddy":None,
-                "already-had":[],
-                "email":row[6] if len(row) > 6 else None
-            }
+            nets.add(Clarinet(row[0], row[1], row[2], row[3], row[4], row[6]))
     return nets
-
-def strip_vals(string):
-    num = ""
-    for char in string:
-        if char.isdigit():
-            num += char
-    return num
-
-def load_old_bus_buddies(nets):
-    if not os.path.exists("hist.csv"):
-        return
-    with open("hist.csv", "r") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if row[0] in nets:
-                nets[row[0]]["already-had"] = row[1:]
-
-
-def update_bus_buddies(nets):
-    former_list = {}
-    with open("hist.csv", "r") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            former_list[row[0]] = row[1:]
-    for net in nets:
-        if net in former_list:
-            former_list[net].append(nets[net]['buddy'])
-        else:
-            former_list[net] = [nets[net]['buddy']]
-
-    with open("hist.csv", "w", newline='') as f:
-        writer = csv.writer(f)
-        for item in former_list:
-            writer.writerow([item]+former_list[item])
 
 
 def generate_messages(nets, send_message=False):
@@ -133,7 +138,6 @@ def gen_bus_buddies(nets):
 
 def send_main_buddies(m = False):
     nets = get_google_sheets()
-    load_old_bus_buddies(nets)
     if gen_bus_buddies(nets) is None:
         print("Failed")
         return
@@ -151,6 +155,8 @@ def resend_buddies(m = False):
     generate_messages(nets, send_message=m)
 
 def main():
+    
+    '''
     # Changing this to True will send out messages. Be cautious
     MESSASGE = False
 
@@ -162,6 +168,7 @@ def main():
     else:
         print("No option corresponds with that choice")
     print("DONE!")
+    '''
 
 if __name__ == '__main__':
     main()
