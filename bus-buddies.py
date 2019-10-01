@@ -6,17 +6,41 @@ import json
 import os
 import random
 import sms
-import send_email
+import google_api
 import time
 import config
-import sqlite3
+import logging
+import argparse
 
-# If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly', 'https://www.googleapis.com/auth/gmail.send']
 SPREADSHEET_ID = config.SPREADSHEET_ID
 RANGE_NAME = config.RANGE_NAME
 
 class Clarinet():
+    clarinet_list = {}
+    @staticmethod
+    def deserializeFormat(serial):
+        c = Clarinet(
+            serial['name'], 
+            serial['likes'], 
+            serial['dislikes'],
+            serial['allergies'],
+            serial['number'],
+            serial['email']
+        )
+        c.history = serial['history']
+        return c
+    @staticmethod
+    def serializeFormat(net):
+        return {
+            'name': net.name,
+            'likes': net.likes,
+            'dislikes': net.dislikes,
+            'allergies': net.allergies,
+            'number': net.number,
+            'email': net.email,
+            'history': net.history
+        }
     def __init__(self, name, likes, dislikes, allergies, number, email):
         self.name = name
         self.likes = likes
@@ -26,16 +50,10 @@ class Clarinet():
         self.email = email
         self.buddy = None
         self.history = {}
-    def serializeFormat(self):
-        return {
-            'name': self.name,
-            'likes': self.likes,
-            'dislikes': self.dislikes,
-            'allergies': self.allergies,
-            'number': self.number,
-            'email': self.email,
-            'history': self.history
-        }
+        self.optout = False
+    def setBuddy(self, name, game):
+        self.buddy = Clarinet.clarinet_list[name]
+        self.history[name] = game
     def __eq__(self, other):
         if isinstance(other, Clarinet):
             return other.name == self.name
@@ -44,131 +62,114 @@ class Clarinet():
         return False
     def __hash__(self):
         return hash(self.name)
-
-def get_google_sheets():
-    creds = None
-    # The file token.pickle stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first
-    # time.
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
-            creds = pickle.load(token)
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open('token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
-
-    service = build('sheets', 'v4', credentials=creds)
-
-    # Call the Sheets API
-    sheet = service.spreadsheets()
-    result = sheet.values().get(spreadsheetId=SPREADSHEET_ID,
-                                range=RANGE_NAME).execute()
-    values = result.get('values', [])
-
-    if not values:
-        print('No data found.')
-    nets = set()
-
-    if not values:
-        print('No data found.')
-    else:
-        for row in values[1:]:
-            if len(row) > 5 and row[5] != "":
-                print("%s opted out" % row[0])
-                continue
-            nets.add(Clarinet(row[0], row[1], row[2], row[3], row[4], row[6]))
-    return nets
-
-
-def generate_messages(nets, send_message=False):
-    game = "GAME"
-    for net in nets:
-        name = net
-        number = nets[net]['number']
-        email = nets[net]['email']
-        buddy_obj = nets[nets[net]['buddy']]
-        buddy_name = nets[net]['buddy']
-        likes = buddy_obj['likes']
-        dislikes = buddy_obj['dislikes']
-        allergies = buddy_obj['allergies']
-        msg = "Hello {name}, your bus buddy for the {game} game is {buddy}.\nLikes: {likes}\nDislikes: {dislikes}\nAllergies: {allergies}\n\nGo Bruins!".format(
-            name=name, 
-            buddy=buddy_name, 
-            likes=likes, 
-            dislikes=dislikes, 
-            allergies=allergies,
-            game=game
+    def print(self, cheer):
+        return "Hi %s, your bus buddy for the %s game is %s.\nLikes: %s\nDislikes: %s\nAllergies: %s\n\n Go Bruins, %s" % (
+            self.name, self.history[self.buddy], self.buddy.name, self.buddy.likes, self.buddy.dislikes, self.buddy.allergies, cheer
         )
-        print(email)
-        print(number)
-        if send_message:
-            time.sleep(2.5)
-            if email is not None:
-                send_email.send_email(sender = conf.EMAIL, receiver=email, subject="{} Bus Buddy".format(game), message=msg)
-            if number is not None:
-                sms.send_sms(number=number, message=msg)
+
+def load_and_download_individuals():
+    if os.path.exists('cached_history.json'):
+        with open('cached_history.json', 'r') as f:
+            nets = json.load(f)
+        for name, values in nets.items():
+            Clarinet.clarinet_list[name] = Clarinet.deserializeFormat(values)
+    data = google_api.get_google_sheets(config.SPREADSHEET_ID, config.RANGE_NAME)
+    for row in data:
+        if row[0] in Clarinet.clarinet_list:
+            Clarinet.clarinet_list[row[0]].likes = row[1]
+            Clarinet.clarinet_list[row[0]].dislikes = row[2]
+            Clarinet.clarinet_list[row[0]].allergies = row[3]
+            Clarinet.clarinet_list[row[0]].number = row[4]
+            Clarinet.clarinet_list[row[0]].email = row[5]
         else:
-            print(msg)
+            Clarinet.clarinet_list[row[0]] = Clarinet(row[0], row[1], row[2], row[3], row[4], row[5])
+        if len(row) > 6 and row[6].lower() == 'yes':
+            Clarinet.clarinet_list[row[0]].optout = True
+        else:
+            Clarinet.clarinet_list[row[0]].optout = False
 
-
-def gen_bus_buddies(nets):
-    net_list = list(nets)
-    for net in nets:
-        potential_buddies = set(net_list.copy())
-        if net in potential_buddies:
-            potential_buddies.remove(net)  # Cannot be a buddy with yourself!
-        for done_bud in nets[net]['already-had']:
-            if done_bud in potential_buddies:
-                potential_buddies.remove(done_bud)
+def match_buddies(game):
+    net_list = []
+    for k, v in Clarinet.clarinet_list.items():
+        if not v.optout:
+            net_list.append(k)
+    buddies = net_list.copy()
+    for name in net_list:
+        potential_buddies = set(buddies.copy())
+        if name in potential_buddies:
+            potential_buddies.remove(name)  # Cannot be a buddy with yourself!
+        for past in Clarinet.clarinet_list[name].history:
+            if past in potential_buddies:
+                potential_buddies.remove(past)
         if len(potential_buddies) == 0:
-            print("WARNING! No possible buddies for {}".format(net))
-            return None  # Error was encountered, need to reselect
+            raise Exception("WARNING! No possible buddies for {}".format(name))
         buddy = random.sample(potential_buddies, 1)[0]
-        nets[net]['buddy'] = buddy
-        net_list.remove(buddy)
-    return 0
+        Clarinet.clarinet_list[name].setBuddy(buddy, game)
+        buddies.remove(buddy)
 
-def send_main_buddies(m = False):
-    nets = get_google_sheets()
-    if gen_bus_buddies(nets) is None:
-        print("Failed")
-        return
-    i = input("Press enter to continue, q to quit: ")
-    if i == 'Q' or i == 'q':
-        return
-    generate_messages(nets, send_message=m)
-    update_bus_buddies(nets)
+def send_messages(game, cheer):
+    result = input('Are you sure you want to send the messages. Type YES to confirm')
+    if result == 'YES':
+        for _, net in Clarinet.clarinet_list.items():
+            if not net.optout:
+                time.sleep(2)
+                google_api.send_email(config.EMAIL, net.email, 'Bus Buddy for %s' % game, net.print(cheer))
+    else:
+        print('Logging locally to terminal and exiting')
+        for _, net in Clarinet.clarinet_list.items():
+            if not net.optout:
+                print(net.print(cheer))
+        exit(2)
 
-def resend_buddies(m = False):
-    nets = get_google_sheets()
-    load_old_bus_buddies(nets)
-    for net in nets:
-        nets[net]['buddy'] = nets[net]['already-had'][-1]
-    generate_messages(nets, send_message=m)
+def reserialize_individuals():
+    blob = {}
+    for key, value in Clarinet.clarinet_list.items():
+        blob[key] = Clarinet.serializeFormat(value)
+    with open('cached_history.json', 'w') as f:
+        json.dump(blob, f)
+    logging.log(0, 'Successfully wrote cached_history.json to disk')
+
+def send_sample_messages(subject, body):
+    result = input('Are you sure you want to send messsages? Type YES to confirm')
+    if result == 'YES':
+        for _, net in Clarinet.clarinet_list.items():
+            google_api.send_email(config.EMAIL, net.email, subject, body)
+            time.sleep(2.5)
+
+def resend_game_message(game):
+    result = input('Are you sure you want to resend messages for the %s game? Type YES to confirm' % game)
+    if result == 'YES':
+        for _, net in Clarinet.clarinet_list.items():
+            pass # TODO
 
 def main():
+    parser = argparse.ArgumentParser()
+    send_type = parser.add_mutually_exclusive_group()
+    send_type.add_argument('--generate_new_messages', action='store_true', help='Send a new week of bus buddy messages')
+    send_type.add_argument('--resend_game_messages', action='store_true', help='Resend the messages of a specific game')
+    send_type.add_argument('--send_test_messages', action='store_true', help='Send a sample message with')
     
-    '''
-    # Changing this to True will send out messages. Be cautious
-    MESSASGE = False
+    parser.add_argument('--opponent', help='The opponent we are facing next')
+    parser.add_argument('--cheer', help='The cheer (eg chop the trees) to postpend to the messages')
+    parser.add_argument('--subject', help='subject of a test message to send')
+    parser.add_argument('--body', help='the body of a test message to send')
 
-    choice = input("Do you want to resend [r] or send new [n]? ")
-    if choice == "r":
-        resend_buddies(MESSASGE)
-    elif choice == "n":
-        send_main_buddies(MESSASGE)
-    else:
-        print("No option corresponds with that choice")
-    print("DONE!")
-    '''
+    args = parser.parse_args()
+    if args.send_test_messages:
+        if args.body is None or args.subject is None:
+            raise ValueError('Must provide both a --subject and a --body in order to send test messages')
+        load_and_download_individuals()
+        send_sample_messages(args.subject, args.body)
+    elif args.resend_game_messages:
+        if args.opponent is None:
+            raise ValueError('Must provide a --opponent to resend messages')
+    elif args.generate_new_messages:
+        if args.opponent is None or args.cheer is None:
+            raise ValueError('Must provide both a --opponent and a --cheer to send new messages')
+        load_and_download_individuals()
+        match_buddies(args.opponent)
+        send_messages(args.opponent, args.cheer)
+        reserialize_individuals()
 
 if __name__ == '__main__':
     main()

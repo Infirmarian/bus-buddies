@@ -1,6 +1,6 @@
-conf.py
-
-
+config.py
 .vscode/
-
 venv/
+__pycache__/
+credentials.json
+*.pickle
