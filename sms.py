@@ -1,14 +1,13 @@
-import boto3
+from twilio.rest import Client
+import config
 
-# Create an SNS client
-client = boto3.client(
-    "sns",
-    region_name="us-west-2"
-)
+client = Client(config.TWILIO_ID, config.TWILIO_ACCOUNT_TOKEN)
 
-def send_sms(number, message):
-    client.publish(
-        PhoneNumber="1"+number,
-        Message=message
-    )
-    print("Sent a message to {}".format(number))
+def send_sms_twilio(body, to):
+    message = client.messages.create(
+            body=body,
+            from_='+%s' % config.PHONE_NUMBER,
+            to=('+1%s' if len(to) <= 10 else '+%s') % to
+        )
+    print('Sent message to %s' % to)
+

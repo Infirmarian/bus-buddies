@@ -114,6 +114,7 @@ def send_messages(game, cheer):
             if not net.optout:
                 time.sleep(2)
                 google_api.send_email(config.EMAIL, net.email, 'Bus Buddy for %s' % game, net.print(cheer))
+                sms.send_sms_twilio(net.print(cheer), net.number)
     else:
         print('Logging locally to terminal and exiting')
         for _, net in Clarinet.clarinet_list.items():
@@ -134,6 +135,7 @@ def send_sample_messages(subject, body):
     if result == 'YES':
         for _, net in Clarinet.clarinet_list.items():
             google_api.send_email(config.EMAIL, net.email, subject, body)
+            sms.send_sms_twilio(body, net.number)
             time.sleep(2.5)
 
 def resend_game_message(game):
