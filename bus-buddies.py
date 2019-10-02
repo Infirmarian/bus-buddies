@@ -109,18 +109,24 @@ def match_buddies(game):
 
 def send_messages(game, cheer):
     result = input('Are you sure you want to send the messages. Type YES to confirm')
+    failed = []
     if result == 'YES':
         for _, net in Clarinet.clarinet_list.items():
             if not net.optout:
                 time.sleep(2)
-                google_api.send_email(config.EMAIL, net.email, 'Bus Buddy for %s' % game, net.print(cheer))
-                sms.send_sms_twilio(net.print(cheer), net.number)
+                try:
+                    google_api.send_email(config.EMAIL, net.email, 'Bus Buddy for %s' % game, net.print(cheer))
+                    sms.send_sms_twilio(net.print(cheer), net.number)
+                except Exception as e:
+                    print(e)
+                    failed.append(net)
+        return failed
     else:
         print('Logging locally to terminal and exiting')
         for _, net in Clarinet.clarinet_list.items():
             if not net.optout:
                 print(net.print(cheer))
-        exit(2)
+        return []
 
 def reserialize_individuals():
     blob = {}
@@ -170,7 +176,11 @@ def main():
             raise ValueError('Must provide both a --opponent and a --cheer to send new messages')
         load_and_download_individuals()
         match_buddies(args.opponent)
-        send_messages(args.opponent, args.cheer)
+        failed = send_messages(args.opponent, args.cheer)
+        if len(failed) > 0:
+            print('Messages for the %s game failed for the following people' % args.opponent)
+            for net in failed:
+                print(net.name)
         reserialize_individuals()
 
 if __name__ == '__main__':
