@@ -3,6 +3,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 import pickle
 import json
+import csv
 import os
 import random
 import sms
@@ -79,7 +80,7 @@ def load_and_download_individuals():
             Clarinet.clarinet_list[row[0]].likes = row[1]
             Clarinet.clarinet_list[row[0]].dislikes = row[2]
             Clarinet.clarinet_list[row[0]].allergies = row[3]
-            Clarinet.clarinet_list[row[0]].number = row[4]
+            Clarinet.clarinet_list[row[0]].number = ''.join(n if n.isdigit() else '' for n in row[4])
             Clarinet.clarinet_list[row[0]].email = row[5]
         else:
             Clarinet.clarinet_list[row[0]] = Clarinet(row[0], row[1], row[2], row[3], row[4], row[5])
@@ -106,9 +107,10 @@ def match_buddies(game):
         buddy = random.sample(potential_buddies, 1)[0]
         Clarinet.clarinet_list[name].setBuddy(buddy, game)
         buddies.remove(buddy)
+    print('Successfully paired bus buddies')
 
 def send_messages(game, cheer):
-    result = input('Are you sure you want to send the messages. Type YES to confirm')
+    result = input('Are you sure you want to send the messages. Type YES to confirm: ')
     failed = []
     if result == 'YES':
         for _, net in Clarinet.clarinet_list.items():
@@ -126,7 +128,7 @@ def send_messages(game, cheer):
         for _, net in Clarinet.clarinet_list.items():
             if not net.optout:
                 print(net.print(cheer))
-        return []
+        exit(0)
 
 def reserialize_individuals():
     blob = {}
@@ -134,7 +136,7 @@ def reserialize_individuals():
         blob[key] = Clarinet.serializeFormat(value)
     with open('cached_history.json', 'w') as f:
         json.dump(blob, f)
-    logging.log(0, 'Successfully wrote cached_history.json to disk')
+    print('Successfully wrote cached_history.json to disk')
 
 def send_sample_messages(subject, body):
     result = input('Are you sure you want to send messsages? Type YES to confirm')
@@ -150,13 +152,42 @@ def resend_game_message(game):
         for _, net in Clarinet.clarinet_list.items():
             pass # TODO
 
+def write_record(output):
+    with open('cached_history.json') as f:
+        data = json.load(f)
+    games = {}
+    gcount = 1
+    names = {}
+    ncount = 1
+    for key, value in data.items():
+        for name, game in value['history'].items():
+            if game not in games:
+                games[game] = gcount
+                gcount += 1
+            if name not in names:
+                names[name] = ncount
+                ncount += 1
+    result = [["" for n in range(gcount)] for n in range(ncount)]
+    result[0][0] = "Name"
+    for game, ind in games.items():
+        result[0][ind] = game
+    for key, value in data.items():
+        for name, game in value['history'].items():
+            result[names[name]][games[game]] = key
+        result[names[key]][0] = key
+    result = result[0:1] + sorted(result[1:], key=lambda x: x[0])
+    with open(output, 'w') as f:
+        writer = csv.writer(f)
+        writer.writerows(result)
+    print("Season results dumped to file %s" % output)
+
 def main():
     parser = argparse.ArgumentParser()
     send_type = parser.add_mutually_exclusive_group()
     send_type.add_argument('--generate_new_messages', action='store_true', help='Send a new week of bus buddy messages')
     send_type.add_argument('--resend_game_messages', action='store_true', help='Resend the messages of a specific game')
     send_type.add_argument('--send_test_messages', action='store_true', help='Send a sample message with')
-    
+    send_type.add_argument('--write_season_record', help='Create the CSV file representing all pairings for the year so far')
     parser.add_argument('--opponent', help='The opponent we are facing next')
     parser.add_argument('--cheer', help='The cheer (eg chop the trees) to postpend to the messages')
     parser.add_argument('--subject', help='subject of a test message to send')
@@ -171,6 +202,7 @@ def main():
     elif args.resend_game_messages:
         if args.opponent is None:
             raise ValueError('Must provide a --opponent to resend messages')
+        # TODO: cross this bridge when we come to it!
     elif args.generate_new_messages:
         if args.opponent is None or args.cheer is None:
             raise ValueError('Must provide both a --opponent and a --cheer to send new messages')
@@ -182,6 +214,8 @@ def main():
             for net in failed:
                 print(net.name)
         reserialize_individuals()
+    elif args.write_season_record:
+        write_record(args.write_season_record)
 
 if __name__ == '__main__':
     main()
